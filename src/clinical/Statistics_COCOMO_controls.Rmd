@@ -1,0 +1,136 @@
+---
+title: "Statistics"
+output: html_notebook
+---
+
+
+### clean environment
+```{r}
+rm(list=ls())
+```
+
+### set directory
+```{r setup}
+    knitr::opts_knit$set(root.dir = normalizePath("~/Desktop/Code-PHD/3_layers_integration/")) 
+```
+
+
+```{r}
+library(summarize)
+library(dplyr)
+library(xlsx)
+```
+
+```{r}
+clinical <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/processing/clinical_data_clean_for_regression_models.csv")
+clinical <- select(clinical, X, AGE, GENDER, BMI)
+```
+
+```{r}
+data <- read.xlsx("/home/flomik/Desktop/Code-PHD/COCOMO_txn/data/clinical/COCOMO_Master File_SK.xlsx", 1)
+data <- select(data, COCOMO_ID, AGE, GENDER, BMI)
+```
+
+```{r}
+cluster <- read.csv("processing/cluster_SNF_3_omics_3_clusters_plusHC.csv")
+cluster$X <- NULL
+names(cluster)[2] <- "COCOMO_ID"
+cluster <- cluster[!is.na(cluster$cluster),]
+
+data <- merge(data, cluster, by ="COCOMO_ID", all.y = TRUE)
+data[data$COCOMO_ID == "1008",2:4] <- clinical[clinical$X == "1008",2:4]
+data[data$COCOMO_ID == "1046",2:4] <- clinical[clinical$X == "1046",2:4]
+data[data$COCOMO_ID == "1050",2:4] <- clinical[clinical$X == "1050",2:4]
+data[data$COCOMO_ID == "1249",2:4] <- clinical[clinical$X == "1249",2:4]
+data[data$COCOMO_ID == "1331",2:4] <- clinical[clinical$X == "1331",2:4]
+data[data$COCOMO_ID == "1644",2:4] <- clinical[clinical$X == "1644",2:4]
+data[data$COCOMO_ID == "2085",2:4] <- clinical[clinical$X == "2085",2:4] 
+```
+
+```{r}
+data_numeric <- data
+x <- pairwise.wilcox.test(data_numeric[,2], data_numeric$cluster, p.adj = "none")
+x2 <- data.frame(x$p.value)
+colnames(x2) <- gsub("X", "", colnames(x2))
+colnames(x2)
+x
+write.csv(x2, "results/individual_characteristics_pairwise.wilcox.test_Age.csv")
+
+x <- pairwise.wilcox.test(data_numeric[,4], data_numeric$cluster, p.adj = "none")
+x2 <- data.frame(x$p.value)
+colnames(x2) <- gsub("X", "", colnames(x2))
+colnames(x2)
+x
+write.csv(x2, "results/individual_characteristics_pairwise.wilcox.test_BMI.csv")
+```
+
+```{r}
+pairwise.chisq.test <- function(x, g, p.adjust.method = p.adjust.methods, ...) {
+  DNAME <- paste(deparse(substitute(x)), "and", deparse(substitute(g)))
+  g <- factor(g)
+  p.adjust.method <- match.arg(p.adjust.method)
+
+  compare.levels <- function(i, j) {
+    xi <- x[as.integer(g) == i]
+    xj <- x[as.integer(g) == j]
+    m1 <- table(xi)
+    m2 <- table(xj)
+    m <- rbind(m1, m2)
+    print(m)
+    chisq.test(m)$p.value
+  }
+  PVAL <- pairwise.table(compare.levels, levels(g), p.adjust.method)
+  ans <- list(method = "chi-squared test", data.name = DNAME, p.value = PVAL, 
+              p.adjust.method = p.adjust.method)
+  class(ans) <- "pairwise.htest"
+  ans
+}
+```
+
+
+```{r}
+y <- data.frame(table(data_numeric$GENDER, data_numeric$cluster))
+
+x <- pairwise.chisq.test(data_numeric$GENDER, data_numeric$cluster, p.adjust.method = "none")
+x2 <- data.frame(x$p.value)
+x2
+write.csv(x2, "results/individual_characteristics_pairwise.chisq.test_GENDER.csv")
+write.csv(y, "results/individual_characteristics_table_GENDER.csv")
+```
+  
+```{r}
+table_numeric <- data.frame(parameter = rep(names(data)[c(2,4)], each = 4), cluster = rep(c(1, 2, 3, "Ctrl"), length(names(data)[c(2,4)])), Mean_SD = NA, pval_anova = NA)
+j = 1
+
+
+
+
+for (i in c(2,4)){
+  c1 <- data_numeric[data_numeric$cluster == 1,i]
+  c2 <- data_numeric[data_numeric$cluster == 2,i]
+  c3 <- data_numeric[data_numeric$cluster == 3,i]
+  c4 <- data_numeric[data_numeric$cluster == "Ctrl",i]
+  x <- paste0(round(medIQR(c1)[[1]], 2), "(", round(medIQR(c1)[[2]], 2), "-", round(medIQR(c1)[[3]], 2), ")")
+  y <- paste0(round(medIQR(c2)[[1]], 2), "(", round(medIQR(c2)[[2]], 2), "-", round(medIQR(c2)[[3]], 2), ")")
+  z <- paste0(round(medIQR(c3)[[1]], 2), "(", round(medIQR(c3)[[2]], 2), "-", round(medIQR(c3)[[3]], 2), ")")
+  a <- paste0(round(medIQR(c4)[[1]], 2), "(", round(medIQR(c4)[[2]], 2), "-", round(medIQR(c4)[[3]], 2), ")")
+  print(IQR(c1))
+  print(IQR(c4))
+  table_numeric[c(j, j+1, j+2, j +3), 3] <- c(x, y , z, a)
+  res.aov <- kruskal.test(data_numeric[ ,i] ~ cluster, data = data_numeric)
+  table_numeric[j, 4] <- res.aov$p.value
+  j = j + 4
+}
+
+
+
+
+table_numeric$X <- paste0("C", table_numeric$cluster, "_", table_numeric$parameter)
+
+#table_numeric <-  merge(table_numeric, reg, by = "X")
+
+table_numeric$X <- NULL
+
+write.xlsx(table_numeric, "results/COCOMO_3_layers_individual_characteristics.xlsx")
+```
+

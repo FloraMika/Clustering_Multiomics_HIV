@@ -1,0 +1,166 @@
+---
+title: "RF models 3 layers integration metabolome"
+output: html_notebook
+---
+
+### clean environment
+```{r}
+rm(list=ls())
+```
+
+### set directory
+```{r setup}
+    knitr::opts_knit$set(root.dir = normalizePath("~/Desktop/Code-PHD/3_layers_integration/")) 
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+source("src/ML.R")
+library(stringi)
+library(randomForest)
+library(caret)
+```
+
+```{r}
+name_ana <- "3_layers_microbiome_strat"
+```
+
+## load data
+```{r}
+mic <- read.csv("processing/relative_abundance_table.csv", row.names = 1)
+mic <- data.frame(t(mic))
+mic$X <- gsub("X","", rownames(mic))
+mic <- mic[, sapply(mic, var) > 0]
+```
+
+
+```{r}
+data_lip <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/processing/lipidomics_log2_plusHC.csv", check.names = FALSE, row.names = NULL)
+data_lip$cluster <- factor(data_lip$cluster, levels = c("Ctrl", 1, 2, 3))
+data_lip <- data_lip[data_lip$X %in% mic$X,]
+#data_lip[,-1] <- data_lip[, sapply(data_lip[,-1], var) > 0.3]
+table_lip <- data.frame(metabolites = colnames(data_lip)[-c(1,2)], variable = paste0("lip", 1:ncol(data_lip[,-c(1,2)])))
+colnames(data_lip)[-c(1,2)] <- paste0("lip", 1:ncol(data_lip[,-c(1,2)]))
+
+
+
+data_met <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/processing/metabolomics_log2_plusHC.csv", check.names = FALSE)
+data_met$cluster <- factor(data_met$cluster, levels = c("Ctrl", 1, 2, 3))
+data_met <- data_met[data_met$X %in% mic$X,]
+data_met$X <- NULL
+table_met <- data.frame(metabolites = colnames(data_met)[-c(1)], variable = paste0("met", 1:ncol(data_met[,-c(1)])))
+colnames(data_met)[-c(1)] <- paste0("met", 1:ncol(data_met[,-c(1)]))
+data_met <- data_met[data_met$cluster != "Ctrl",]
+```
+
+```{r}
+mic <- mic[order(match(data_lip$X, mic$X)),]
+print(mic$X)
+print(data_lip$X)
+mic <- data.frame(data_lip$cluster, mic)
+data_lip$X <- NULL
+names(mic)[1] <- "cluster"
+
+mic <- mic[mic$cluster != "Ctrl",]
+data_lip <- data_lip[data_lip$cluster != "Ctrl",]
+mic$X <- NULL
+```
+
+
+### remove data with low variance --> only one metabolite so no need
+
+## run Run normal random forest
+```{r}
+title <- paste0(name_ana)
+table_cond <- mic
+names(table_cond)[1] <- "Condition"
+table_cond$Condition <- as.factor(as.vector(paste0("C",table_cond$Condition)))
+```
+
+1) mild vs severe
+```{r}
+set.seed(123)
+fit <- randomForest(Condition ~ ., data = table_cond, na.action = na.roughfix, ntree = 1000)
+fit
+plot(fit)
+```
+## create stratified folds
+```{r}
+set.seed(1256)
+
+tunegrid <- expand.grid(.mtry = (1:15)) 
+
+folds <- 10
+
+cvIndex <- createFolds(factor(table_cond$Condition), folds, list = TRUE)
+
+print(table(table_cond$Condition)/97)
+for (i in 1:10) {
+  US_f1 <- table_cond[cvIndex[[i]],]
+  print(table(US_f1$Condition)/nrow(US_f1))
+}
+
+control <- trainControl(index = cvIndex,
+                           method='cv', 
+                           number=folds,
+                           savePredictions = "all",
+                        classProbs = TRUE,
+                        p = 0.80)
+
+
+rf_default <- train(as.factor(Condition)~., 
+                    data=table_cond, 
+                    method='rf', 
+                    metric = 'Accuracy',
+                    tuneGrid=tunegrid, 
+                    trControl=control, importance = TRUE, ntree = 1000)
+
+# keep final model
+rf <- rf_default$finalModel
+
+rf
+# save final model
+file_name <- paste0("results/ML/", title, "model_2_", title)
+saveRDS(rf, file_name)
+```
+
+```{r}
+var_importance <- randomForest::importance(rf)
+names <- rownames(var_importance)
+var_importance <- data.frame(MeanDecreaseAccuracy = var_importance[,4], variable = names)
+var_importance <- arrange(var_importance, MeanDecreaseAccuracy)
+```
+
+
+```{r}
+var_importance <- arrange(var_importance, MeanDecreaseAccuracy)
+```
+
+```{r}
+position <- var_importance$variable
+```
+
+```{r}
+theme_set(theme_classic())
+
+ a<- ggplot(var_importance, aes(x=variable, y=MeanDecreaseAccuracy)) + 
+  geom_point(size = 2, alpha = 0.9, shape = 19 , color = "#0000FF") +
+  scale_x_discrete(limits = position) + coord_flip()+ 
+      scale_fill_manual(name = "Protein regulation", values=c("#ee7621", "#007300", "grey")) + scale_color_manual(name = "Protein regulation", values = c("#ee7621", "#007300", "grey"))+ theme(axis.text.x =element_text(colour="black", size = 12), axis.text.y = element_text(colour="black", size = 12))+
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(colour = "black", size=1))+xlab("")+theme_minimal()
+ 
+a
+
+ggsave("results/figures/importance_plot_RF_microbiome.pdf" , height = 4, width = 3)
+```
+
+
+## export confusion matrix
+```{r}
+write.table(rf$confusion, file = "results/ML/confusion_metabolites_2.txt", sep = "\t")
+```
+

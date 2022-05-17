@@ -1,0 +1,207 @@
+---
+title: "Biomarkers clusters"
+output: html_notebook
+---
+
+
+
+### clean environment
+```{r}
+rm(list=ls())
+```
+
+### set directory
+```{r setup}
+    knitr::opts_knit$set(root.dir = normalizePath("~/Desktop/Code-PHD/3_layers_integration/")) 
+```
+
+```{r}
+library(Hmisc)
+```
+
+### correct biomarkers for transmission mode + VAT + CD4 + hypertension
+### load data and clinical parameters
+```{r}
+clinical <- read.csv("processing/clinical_data_clean_for_regression_models.csv")
+clinical <- select(clinical, X, cluster, hypertension, VAT, CD4, Transm_mode)
+clinical$Transm_mode <- ifelse(clinical$Transm_mode != 1, 2, 1)
+```
+### load data
+```{r}
+mic <- read.csv("processing/relative_abundance_table.csv", row.names = 1)
+mic <- data.frame(t(mic))
+mic$X <- gsub("X","", rownames(mic))
+mic <- merge(clinical, mic, by = "X")
+```
+
+
+```{r}
+data_lip <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/processing/lipidomics_log2_plusHC.csv", check.names = FALSE, row.names = NULL)
+table_lip <- data.frame(metabolites = colnames(data_lip)[-c(1,2)], variable = paste0("lip", 1:ncol(data_lip[,-c(1,2)])))
+data_lip$cluster <- NULL
+data_lip <- data_lip[data_lip$X %in% mic$X,]
+data_lip <- merge(clinical, data_lip, by = "X")
+
+
+data_met <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/processing/metabolomics_log2_plusHC.csv", check.names = FALSE)
+table_met <- data.frame(metabolites = colnames(data_met)[-c(1)], variable = paste0("met", 1:ncol(data_met[,-c(1)])))
+data_met$cluster <- NULL
+data_met <- data_met[data_met$X %in% mic$X,]
+data_met <- merge(clinical, data_met, by = "X")
+```
+
+## load dge
+```{r}
+met <- read.delim("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/LIMMA_results_metabolites_with_HC_filt.csv", sep = " ")
+met <- met[!grepl("Ctrl", met$Comp),]
+
+lip <- read.delim("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/LIMMA_results_lipids_with_HC_filt.csv", sep = " ")
+lip <- lip[!grepl("Ctrl", lip$Comp),]
+
+mi_1 <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/microbiome_results_grp1_grp2.csv")
+mi_2 <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/microbiome_results_grp1_grp3.csv")
+mi_3 <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/microbiome_results_grp2_grp3.csv")
+
+list_mi <- mi_1$X[mi_1$X %in% c(mi_2$X, mi_3$X)]
+
+unique_met <- unique(met$BIOCHEMICAL)
+list_met <- list()
+
+x = 1
+for (i in 1:length(unique_met)) {
+  dat <- met[met$BIOCHEMICAL == unique_met[i],]
+  if(nrow(dat) == 3){
+    list_met[[x]] <- unique_met[i]
+    x = x + 1
+  }
+}
+
+unique_lip <- unique(lip$BIOCHEMICAL)
+list_lip <- list()
+
+x = 1
+for (i in 1:length(unique_lip)) {
+  dat <-lip[lip$BIOCHEMICAL == unique_lip[i],]
+  if(nrow(dat) == 3){
+    list_lip[[x]] <- unique_lip[i]
+    x = x + 1
+  }
+}
+```
+
+
+## import RF results
+```{r}
+rf_mic <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/ML/3_layers_microbiome/SelectedAttributes_3_layers_microbiome.csv")
+data_mic <- mic[,colnames(mic) %in% c(colnames(clinical),rf_mic$x)]
+
+rf_met <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/ML/3_layers_metabolites_4/SelectedAttributes_3_layers_metabolites_4.csv")
+table_met_2 <- table_met[table_met$variable %in% rf_met$x,]
+data_met_2 <- data_met[,colnames(data_met) %in% c(colnames(clinical), table_met_2$metabolites)]
+
+rf_lip <- read.csv("/home/flomik/Desktop/Code-PHD/3_layers_integration/results/ML/3layers_lipids/SelectedAttributes_3layers_lipids.csv")
+table_lip_2 <- table_lip[table_lip$variable %in% rf_lip$x,]
+
+table_lip_2 <- table_lip_2[table_lip_2$metabolites %in% list_lip,]
+
+data_lip_2 <- data_lip[,colnames(data_lip) %in% c(colnames(clinical), table_lip_2$metabolites)]
+```
+
+## correct for clinical parameters lipids
+```{r}
+plm <- as.data.frame(matrix(0,nrow=4,ncol=4))
+for(i in 1:28){ #scdat is my data frame with each column a metabolite
+  plm[i,] <- coef(summary(lm(data_lip_2[,i + 6] ~ cluster + hypertension + VAT + CD4 + Transm_mode, data = data_lip_2)))[2,]
+}
+colnames(plm) <- c("Estimate","StdError","tStat","pvalue")
+rownames(plm) <- colnames(data_lip_2)[7:34]
+
+plm$padjust <- p.adjust(plm$pvalue,method="BH")
+sigplm <- plm[plm$padjust<0.1,] #look only at those with adjusted p.value < 0.05
+write.csv(sigplm, "processing/biomarkers_lipidome_rf_after_correction.csv")
+
+data_lip_3 <- data_lip_2[,colnames(data_lip_2) %in% c("X","cluster",rownames(sigplm))]
+```
+
+```{r}
+plm <- as.data.frame(matrix(0,nrow=4,ncol=4))
+for(i in 1:29){ #scdat is my data frame with each column a metabolite
+  plm[i,] <- coef(summary(lm(data_met_2[,i + 6] ~ cluster + hypertension + VAT + CD4 + Transm_mode, data = data_met_2)))[2,]
+}
+colnames(plm) <- c("Estimate","StdError","tStat","pvalue")
+rownames(plm) <- colnames(data_met_2)[7:35]
+
+plm$padjust <- p.adjust(plm$pvalue,method="BH")
+sigplm <- plm[plm$padjust<0.1,] #look only at those with adjusted p.value < 0.05
+write.csv(sigplm, "processing/biomarkers_metabolites_rf_after_correction.csv")
+
+data_met_3 <- data_met_2[,colnames(data_met_2) %in% c("X","cluster",rownames(sigplm))]
+
+plm
+```
+```{r}
+plm <- as.data.frame(matrix(0,nrow=4,ncol=4))
+for(i in 1:3){ #scdat is my data frame with each column a metabolite
+  plm[i,] <- coef(summary(lm(data_mic[,i + 6] ~ cluster + hypertension + VAT + CD4 + Transm_mode, data = data_mic)))[2,]
+}
+colnames(plm) <- c("Estimate","StdError","tStat","pvalue")
+rownames(plm)[1:3] <- colnames(data_mic)[7:9]
+
+plm$padjust <- p.adjust(plm$pvalue,method="BH")
+sigplm <- plm[plm$padjust<0.1,] #look only at those with adjusted p.value < 0.05
+write.csv(sigplm, "processing/biomarkers_microbiome_rf_after_correction.csv")
+
+data_mic_3 <- data_mic[,colnames(data_mic) %in% c("X","cluster",rownames(sigplm))]
+
+```
+
+```{r}
+i = 1
+j = 4
+m = 4
+```
+
+## correlations
+```{r}
+list_corr <- data.frame(feature_1 = NA, feature_2 = NA, R = NA, pval = NA)
+x = 1
+
+for (i in 1:3) {
+  mic <- data_mic_3[data_mic_3$cluster == i,-c(1,2)]
+  met <- data_met_3[data_met_3$cluster == i,-c(1,2)]
+  lip <- data_lip_3[data_lip_3$cluster == i,-c(1,2)]
+  for (j in 1:ncol(lip)) {
+    for (m in 1:ncol(met)) {
+      cor_1 <- cor.test(mic, met[,m], method = "spearman")
+      if (cor_1$p.value < 0.5 & abs(cor_1$estimate) > 0.4){
+        list_corr[x,1] <- "Otu17"
+        list_corr[x,2] <- names(met)[m]
+        list_corr[x,3] <- cor_1$estimate
+        list_corr[x,4] <- cor_1$p.value
+        x = x + 1
+      }
+      cor_2 <- cor.test(mic, lip[,j], method = "spearman")
+      if (cor_2$p.value < 0.5 & abs(cor_2$estimate) > 0.4){
+        list_corr[x,1] <- "Otu17"
+        list_corr[x,2] <- names(lip)[j]
+        list_corr[x,3] <- cor_2$estimate
+        list_corr[x,4] <- cor_2$p.value
+        x = x + 1
+      }
+      cor_3 <- cor.test(met[,m], lip[,j], method = "spearman")
+      if (cor_3$p.value < 0.5 & abs(cor_3$estimate) > 0.4){
+        list_corr[x,1] <- names(met)[m]
+        list_corr[x,2] <- names(lip)[j]
+        list_corr[x,3] <- cor_3$estimate
+        list_corr[x,4] <- cor_3$p.value
+        x = x + 1
+      }
+    }
+  }
+}
+```
+
+```{r}
+write.csv(list_corr, "processing/correlation_biomarkers.csv", quote = FALSE)
+```
+

@@ -1,0 +1,154 @@
+---
+title: "Find outliers"
+output: html_notebook
+---
+
+### clean environment
+```{r}
+rm(list=ls())
+```
+
+### set directory
+```{r setup}
+    knitr::opts_knit$set(root.dir = normalizePath("~/Desktop/Code-PHD/to do/COCOMO_txn/")) 
+```
+
+### load packages
+```{r}
+library(DESeq2)
+library(dplyr)
+library(SNFtool)
+library(xlsx)
+library(ggplot2)
+library(corrr)
+library(mygene)
+library(edgeR)
+```
+
+
+```{r}
+txn_info <- read.delim("/home/flomik/Desktop/Code-PHD/to do/COCOMO_txn/data/U.Neogi_21_01_sample_info.txt")
+```
+
+```{r}
+col <- c("#006E51","#4C6A92","#AF9483","#D8AE47","#B76BA3","#838487")
+```
+
+
+## load data
+### transcriptomics
+```{r}
+data_txn <- read.csv("processing/COCOMO_transcriptomics_vsd_data_deseq2.csv", row.names = 1, check.names = FALSE)
+
+data_txn <- data.frame(t(data_txn))
+
+dim(data_txn)
+#data_txn <- data_txn[apply(data_txn, 1, mean) > 1, ]
+dim(data_txn)
+data_txn <- data_txn[apply(data_txn, 1, var) >= 0.1, ]
+dim(data_txn)
+data_txn <- data.frame(t(data_txn))
+
+rownames(data_txn) <- gsub("X", "", rownames(data_txn))
+data_txn$COCOMO_ID <- rownames(data_txn)
+```
+
+
+```{r}
+data_test <- data_txn
+data_test$COCOMO_ID <- NULL
+```
+
+```{r}
+x <- as.matrix(t(data_test))
+```
+
+
+```{r}
+# Calculate all correlations 
+trans_cts_corr <- x %>%
+  # we use Spearman's correlation, a non-parametric metric based on ranks
+  cor(method = "spearman")
+
+pdf("results/figures/sample_sample_correlation_COCOMO.pdf", width = 15, height = 15)
+rplot(trans_cts_corr, shape = 20, colors = c("red", "green"), legend = TRUE) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+```
+P20109_176_R1
+P20109_214_R1
+
+```{r}
+library(car)
+pdf("results/figures/qqplot_outliers_transcriptomics.pdf")
+qqPlot(x)
+dev.off()
+```
+
+
+### clinical parameters
+```{r}
+clinical <- read.csv("processing/clinical_data_PCA.csv")
+clinical$X <- NULL
+names(clinical)[2] <- "SNF_cluster"
+clinical_2 <- clinical
+clinical_2 <- clinical_2[,c(1:3, 5)]
+clinical <- clinical[clinical$SNF_cluster != "Ctrl",]
+```
+
+```{r}
+pca_data <- merge(clinical, data_txn, by = "COCOMO_ID")
+rownames(pca_data) <- pca_data$COCOMO_ID
+pca <- prcomp(pca_data[,-c(1:ncol(clinical))], scale. = TRUE)
+rownames(pca)
+```
+
+```{r}
+pca_data$SNF_cluster
+```
+
+```{r}
+pdf("pca_transcriptomics_data.pdf")
+autoplot(pca, data = pca_data, colour = 'SNF_cluster', shape = FALSE, label.size = 3)
+dev.off()
+```
+```{r}
+clinical_2$outlier <- NA
+clinical_2$outlier[clinical_2$COCOMO_ID %in% c("1157", "1107", "1034", "1031", "2019", "1990", "1799")] <- "yes_PCA"
+clinical_2$outlier[clinical_2$COCOMO_ID %in% c("1808", "1031")] <- "yes_sample_cor"
+
+write.csv(clinical_2, "manuscript/outliers_detected_transcriptomics_cocomo.csv")
+```
+
+```{r}
+library(ggfortify)
+```
+
+
+```{r}
+ggplot(df_out, aes( x= PC1, y = PC2, color = group))+ geom_point(size = 5, alpha = 0.9, shape = 19)+ 
+      theme(legend.title=element_text(size=15),legend.text=element_text(size=12),
+            legend.key.size=unit(0.7,"line"),plot.title = element_text(hjust = 0.5),
+            axis.title.y=element_text(size=15),axis.title.x=element_text(size=15),
+            axis.text.y=element_text(size=18),axis.text.x=element_text(size=18))+
+      xlab(paste0("PC1: ",round(a1,0),"% variance")) +
+      ylab(paste0("PC2: ",round(a2,0),"% variance"))+ 
+        theme(axis.title.x = element_text(size=16, face = "bold",color="black"),
+              axis.title.y = element_text(size=16, face = "bold",color="black"),
+              axis.text = element_text(color="black",size=16, face = "bold"),
+              axis.text.x =element_text(color="black",size=16, face = "bold"),
+              panel.border = element_blank(),
+              axis.ticks.x = element_blank(),
+              strip.text.x = element_text(size = 9,color="black"),
+              panel.background = element_rect(fill = "white", colour = "white", size = 0.5, linetype = "solid"),
+              panel.grid.major = element_line(size = 0.5, linetype ='solid', colour = "grey"),
+              panel.grid.minor = element_line(size = 0.25, linetype = 'solid', colour = "grey"),
+              plot.title = element_text(hjust = 0.5, size = 20, face = "bold", vjust=2),
+              legend.background=element_rect(fill = alpha("white", 0)))+
+      scale_color_manual(values = col[-1])
+      path_fig <- paste0("results/figures/PCA/", analysis, "_", type, "_", y, ".pdf")
+      ggsave(path_fig, height = 6, width = 7)
+```
+
+
+      
